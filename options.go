@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,6 +33,7 @@ type Options struct {
 	dataRaw        []string
 	dataBinary     []string
 	dataURLEncode  []string
+	head           bool
 }
 
 func (o *Options) getOptions(app *cli.App) {
@@ -126,6 +126,11 @@ func (o *Options) getOptions(app *cli.App) {
 			Name:  "data-urlencode",
 			Usage: "Sends the data as urlencoded ascii",
 		},
+		cli.BoolFlag{
+			Name:        "head, I",
+			Usage:       "Get HEAD from URL only",
+			Destination: &o.head,
+		},
 	}
 }
 
@@ -150,7 +155,7 @@ func (o *Options) ProcessData() {
 		if strings.HasPrefix(parts[1], "@") {
 			data, err := ioutil.ReadFile(strings.TrimPrefix(parts[1], "@"))
 			if err != nil {
-				log.Fatalf("Unable to read file %s for data element %s\n", strings.TrimPrefix(parts[1], "@"), parts[0])
+				Status.Fatalf("Unable to read file %s for data element %s\n", strings.TrimPrefix(parts[1], "@"), parts[0])
 			}
 			data = []byte(strings.Replace(string(data), "\r", "", -1))
 			data = []byte(strings.Replace(string(data), "\n", "", -1))
@@ -181,7 +186,7 @@ func (opts *Options) openOutputFile() *os.File {
 	var outputFile *os.File
 	if opts.outputFilename != "" {
 		if outputFile, err = os.Create(opts.outputFilename); err != nil {
-			log.Fatalf("Error: Unable to create file '%s' for output\n", opts.outputFilename)
+			Status.Fatalf("Error: Unable to create file '%s' for output\n", opts.outputFilename)
 		}
 	} else {
 		outputFile = os.Stdout
@@ -200,13 +205,13 @@ func (opts *Options) uploadFile() {
 
 	reader, err := os.Open(opts.fileUpload)
 	if err != nil {
-		log.Fatalf("Error opening %s\n", opts.fileUpload)
+		Status.Fatalf("Error opening %s\n", opts.fileUpload)
 	}
 
 	if !opts.silent {
 		fi, err := reader.Stat()
 		if err != nil {
-			log.Fatalf("Unable to get file stats for %v\n", opts.fileUpload)
+			Status.Fatalf("Unable to get file stats for %v\n", opts.fileUpload)
 		}
 		body = &ioprogress.Reader{
 			Reader: reader,

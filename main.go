@@ -19,15 +19,28 @@ import (
 )
 
 var (
-	client = http.Client{}
-	Status = log.New(ioutil.Discard, "", 0)
+	client   = http.Client{}
+	Status   = log.New(os.Stderr, "*", 0)
+	Incoming io.Writer
+	Outgoing io.Writer
 )
+
+type LogWriter struct {
+	*log.Logger
+}
+
+func (l *LogWriter) Write(p []byte) (n int, err error) {
+	l.Print(string(p))
+	return len(p), nil
+}
 
 func init() {
 	cli.VersionFlag = cli.BoolFlag{
 		Name:  "version, V",
 		Usage: "print the version",
 	}
+	Incoming = &LogWriter{Logger: log.New(ioutil.Discard, "< ", 0)}
+	Outgoing = &LogWriter{Logger: log.New(ioutil.Discard, "> ", 0)}
 }
 
 var body io.Reader
@@ -62,7 +75,13 @@ func main() {
 		}
 
 		if opts.verbose {
-			Status.SetOutput(os.Stderr)
+			Incoming.(*LogWriter).SetOutput(os.Stderr)
+			Outgoing.(*LogWriter).SetOutput(os.Stderr)
+		}
+
+		if opts.head {
+			opts.method = "HEAD"
+			Incoming = io.MultiWriter(os.Stdout, Incoming.(*LogWriter))
 		}
 
 		if opts.maxTime > 0 {
@@ -71,7 +90,7 @@ func main() {
 
 		target = c.Args().Get(0)
 		if remote, err = url.Parse(target); err != nil {
-			log.Fatalf("Error: %s does not parse correctly as a URL\n", target)
+			Status.Fatalf("Error: %s does not parse correctly as a URL\n", target)
 		}
 		if remote.Scheme == "" {
 			remote.Scheme = "http"
@@ -104,7 +123,7 @@ func main() {
 
 		req, err := http.NewRequest(opts.method, target, body)
 		if err != nil {
-			log.Fatalf("Error: unable to create http %s request; %s\n", opts.method, err)
+			Status.Fatalf("Error: unable to create http %s request; %s\n", opts.method, err)
 		}
 		req.Header.Set("User-Agent", opts.agent)
 		req.Header.Set("Accept", "*/*")
@@ -114,7 +133,7 @@ func main() {
 			case *os.File:
 				fi, err := b.Stat()
 				if err != nil {
-					log.Fatalf("Unable to get file stats for %v\n", opts.fileUpload)
+					Status.Fatalf("Unable to get file stats for %v\n", opts.fileUpload)
 				}
 				req.ContentLength = fi.Size()
 				req.Header.Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
@@ -127,41 +146,43 @@ func main() {
 		}
 		setHeaders(req, opts.headers)
 
-		Status.Println(">", req.Method, req.URL.Path, req.Proto)
+		fmt.Fprintln(Outgoing, req.Method, req.URL.Path, req.Proto)
 		for k, v := range req.Header {
-			Status.Println(">", k, v)
+			fmt.Fprintln(Outgoing, k, v)
 		}
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Fatalf("Error: Unable to get URL; %s\n", err)
+			Status.Fatalf("Error: Unable to get URL; %s\n", err)
 		}
 		defer resp.Body.Close()
 
-		Status.Printf("< %s %s", resp.Proto, resp.Status)
+		fmt.Fprintf(Incoming, "%s %s\n", resp.Proto, resp.Status)
 
 		for k, v := range resp.Header {
-			Status.Println("<", k, v)
+			fmt.Fprintln(Incoming, k, v)
 		}
 
-		if !opts.silent {
-			progressR := &ioprogress.Reader{
-				Reader: resp.Body,
-				Size:   resp.ContentLength,
-				DrawFunc: ioprogress.DrawTerminalf(os.Stderr, func(progress, total int64) string {
-					return fmt.Sprintf(
-						"%s %s",
-						(ioprogress.DrawTextFormatBarWithIndicator(40, '<'))(progress, total),
-						ioprogress.DrawTextFormatBytes(progress, total))
-				}),
+		if !opts.head {
+			if !opts.silent {
+				progressR := &ioprogress.Reader{
+					Reader: resp.Body,
+					Size:   resp.ContentLength,
+					DrawFunc: ioprogress.DrawTerminalf(os.Stderr, func(progress, total int64) string {
+						return fmt.Sprintf(
+							"%s %s",
+							(ioprogress.DrawTextFormatBarWithIndicator(40, '<'))(progress, total),
+							ioprogress.DrawTextFormatBytes(progress, total))
+					}),
+				}
+				if _, err = io.Copy(outputFile, progressR); err != nil {
+					Status.Fatalf("Error: Failed to copy URL content; %s\n", err)
+				}
 			}
-			if _, err = io.Copy(outputFile, progressR); err != nil {
-				Status.Fatalf("Error: Failed to copy URL content; %s\n", err)
-			}
-		}
-		if opts.silent {
-			if _, err = io.Copy(outputFile, resp.Body); err != nil {
-				Status.Fatalf("Error: Failed to copy URL content; %s\n", err)
+			if opts.silent {
+				if _, err = io.Copy(outputFile, resp.Body); err != nil {
+					Status.Fatalf("Error: Failed to copy URL content; %s\n", err)
+				}
 			}
 		}
 
@@ -209,6 +230,6 @@ func setHeaders(r *http.Request, h []string) {
 func maxTime(maxTime uint) {
 	go func() {
 		<-time.After(time.Duration(maxTime) * time.Second)
-		log.Fatalf("Error: Maximum operation time of %d seconds expired, aborting\n", maxTime)
+		Status.Fatalf("Error: Maximum operation time of %d seconds expired, aborting\n", maxTime)
 	}()
 }
